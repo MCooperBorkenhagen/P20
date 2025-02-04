@@ -1,0 +1,359 @@
+---
+title: "Phonotactics"
+output: html_document
+date: "2025-02-03"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+require(tidyverse)
+require(Hmisc)
+
+
+get_penultimate_phoneme = function(x, return_index = F){
+  
+  phonlength = str_length(x)
+  target = phonlength - 1
+  penultimate = str_split(x, "", simplify = F)[[1]][target]
+  
+  if (return_index == F){
+    
+    return(penultimate)
+    
+  }
+  
+  if (return_index == T) {
+    
+    return(target)
+    
+  }
+  
+}
+
+
+get_first_phoneme = function(x, return_index = F){
+  
+  target = 1
+  first_phoneme = str_split(x, "", simplify = F)[[1]][target]
+  return(first_phoneme)
+  
+}
+
+
+
+get_final_phoneme = function(x, return_index = F){
+  
+  target = str_length(x)
+  final = str_split(x, "", simplify = F)[[1]][target]
+  
+  if (return_index == F){
+    
+    return(final)
+    
+  }
+  
+  if (return_index == T) {
+    
+    return(final)
+    
+  }
+  
+}
+
+
+get_second_phoneme = function(x){
+  
+  target = 2
+  final = str_split(x, "", simplify = F)[[1]][target]
+  
+  return(final)
+  
+}
+
+```
+
+```{r}
+
+load('data/elp_phonotactics.rda')
+
+elp = elp %>% 
+  left_join(read_csv('../words/elp/elp_clean.csv') %>%
+              select(Word = word, NSyll)) %>% 
+  select(Word, Pron, Pron_clean, phon_1, phon_2, phon_n_minus_1, phon_n, NSyll)
+
+# make replacements so that SAMPA is unicode
+phonemes = elp %>% 
+  pull(Pron_clean) %>%                # Extract the 'text' column as a vector
+  str_split("") %>%             # Split each string into individual characters
+  unlist() %>%                  # Flatten the list into a single vector
+  unique()
+
+# Phonemes not present in SAMPA resource: "E", "`", "o", "X" (I think these are vowels)
+
+
+vowels = c("e", "a", "E", "I", "A", "O", "i", "u", "3", "`", "@", "o", "U", "X")
+
+consonants = c("k", "t", "s", "d", "z", "f", "Z", "m", "n", "r", "l", "p", "N", "S", "b", "g", "T", "D", "j", "V", "v", "w", "R", "H", "h", "4", "x")
+
+bicode_a = "3`"
+bicode_b = "tS"
+bicode_c = "dZ"
+bicode_d = "@`"
+bicode_e = "@_X"
+
+# replaced with 5, 6, 7, 8, 9 respectively
+
+
+elp = elp %>% 
+  mutate(Pron_clean = str_replace_all(Pron_clean, bicode_a, "5"),
+         Pron_clean = str_replace_all(Pron_clean, bicode_b, "6"),
+         Pron_clean = str_replace_all(Pron_clean, bicode_c, "7"),
+         Pron_clean = str_replace_all(Pron_clean, bicode_d, "8"),
+         Pron_clean = str_replace_all(Pron_clean, bicode_e, "9"))
+
+
+
+elp = elp %>% 
+  mutate(last_phoneme = str_sub(Pron_clean, -1, -1),
+         first_phoneme = str_sub(Pron_clean, 1, 1),
+         second_phoneme = str_sub(Pron_clean, 2, 2),
+         length = str_length(Word))
+
+
+prop_n_1_n = read_csv('data/prop_n-1_n.csv') %>% 
+  pivot_longer(cols = -phoneme, names_to = "next_phoneme", values_to = "P") %>% 
+  mutate(phoneme = str_replace_all(phoneme, bicode_a, "5"),
+         phoneme = str_replace_all(phoneme, bicode_b, "6"),
+         phoneme = str_replace_all(phoneme, bicode_c, "7"),
+         phoneme = str_replace_all(phoneme, bicode_d, "8"),
+         phoneme = str_replace_all(phoneme, bicode_e, "9"),
+         next_phoneme = str_replace_all(next_phoneme, bicode_a, "5"),
+         next_phoneme = str_replace_all(next_phoneme, bicode_b, "6"),
+         next_phoneme = str_replace_all(next_phoneme, bicode_c, "7"),
+         next_phoneme = str_replace_all(next_phoneme, bicode_d, "8"),
+         next_phoneme = str_replace_all(next_phoneme, bicode_e, "9"))
+
+
+```
+
+I am imagining a wordflow like this:
+
+1. Identify a set of words with complex coda/ onset
+2. Take the N most frequent words from the list
+3. For each word identify the phoneme in the penultimate/ initial position
+4. For that phoneme identify the phoneme (consonant) most/least likely to follow it
+5. Generate a new word with that phoneme in the word-final/ second position
+6. Determine if the generated word is in the ELP dataset
+7. If so, proceed to the next most/least likely phoneme (repeating 6 until 8 is achieved)
+8. If not, save for inspection
+
+
+```{r}
+elp$CV = NA
+  
+for (i in seq(length(elp$Pron_clean))){
+  
+  pron = str_split(elp$Pron_clean[i], "", simplify = F)[[1]]
+  cv = c()
+  
+  
+  for (p in pron){
+    
+    if (p %in% consonants){
+      
+      cv = c(cv, "C")
+      
+    }
+    else {
+      
+      cv = c(cv, "V")
+      
+    }
+    
+    
+  }
+  
+  elp$CV[i] = str_flatten(cv)
+  
+}
+
+elp_1_syll = elp %>% 
+  filter(NSyll == 1 & str_ends(CV, "CC"))
+```
+
+
+## Nonwords generated from manipulating codas
+
+```{r}
+
+nonword_list = list()
+
+
+for (i in seq(length(elp_1_syll$Pron_clean))){
+
+  pron = elp_1_syll$Pron_clean[i]
+  
+  penultimate = get_penultimate_phoneme(pron)
+  word_final_index = str_length(pron)
+
+  df = prop_n_1_n %>% 
+    filter(phoneme == penultimate) %>% 
+    arrange(desc(P)) %>% 
+    mutate(rank = seq_len(n()),
+           nonword_from_manipulated_coda = NA,
+           target_word_for_nonword = elp_1_syll$Word[i],
+           target_pron_for_nonword = pron,
+           word_not_word = NA,
+           word_with_same_sound_in_final_pos = NA)
+
+  for (R in sort(df$rank)){
+    
+    str_sub(pron, word_final_index, word_final_index) <- df %>% 
+      filter(rank == R) %>% 
+      pull(next_phoneme)
+    
+    df$nonword_from_manipulated_coda[R] = pron
+    
+    last_phoneme_ = get_final_phoneme(pron)
+    
+    word_with_same_sound_in_final_pos = elp %>% 
+      filter(last_phoneme == last_phoneme_) %>% 
+      summarise(choice = first(Word)) %>% 
+      pull(choice)
+    
+    df$word_with_same_sound_in_final_pos[R] = word_with_same_sound_in_final_pos
+    
+    if (pron %in% elp$Pron_clean){
+      
+      df$word_not_word[R] = "word"
+
+    }
+    
+    else {
+      
+      df$word_not_word[R] = "nonword"
+      
+      
+    }
+    
+    # get a reference word with the same final phoneme
+  
+  
+    pron = elp_1_syll$Pron_clean[i]
+    
+    
+    
+  }
+  
+  df = df %>% 
+      filter(next_phoneme %in% consonants)
+  
+  nonword_list[[i]] = df
+  
+  print(paste(i, "of", nrow(elp_1_syll), "done"))
+  }
+  
+
+
+
+
+words_with_manipulated_coda = purrr::list_rbind(nonword_list)
+
+words_with_manipulated_coda = words_with_manipulated_coda %>% 
+  filter(word_not_word == "nonword") %>% 
+  select(Word = target_word_for_nonword, Pron_clean = target_pron_for_nonword, nonword_from_manipulated_coda, word_with_same_sound_in_final_pos, probability = P, rank)
+
+
+words_with_manipulated_coda %>% 
+  write_csv("~/Desktop/nonwords_with_manipulated_coda.csv")
+```
+
+
+
+# Now for the onsets
+```{r}
+elp_1_syll_onsets = elp %>% 
+  filter(NSyll == 1 & str_starts(CV, "CC"))
+
+nonword_list_onsets = list()
+
+for (i in seq(length(elp_1_syll_onsets$Pron_clean))){
+
+  pron = elp_1_syll_onsets$Pron_clean[i]
+  
+  first_phoneme = get_first_phoneme(pron)
+  #word_final_index = str_length(pron)
+
+  df = prop_n_1_n %>% 
+    filter(phoneme == first_phoneme) %>% 
+    arrange(desc(P)) %>% 
+    mutate(rank = seq_len(n()),
+           nonword_from_manipulated_onset = NA,
+           target_word_for_nonword = elp_1_syll_onsets$Word[i],
+           target_pron_for_nonword = pron,
+           word_not_word = NA,
+           word_with_same_sound_in_second_pos = NA)
+
+  for (R in sort(df$rank)){
+    
+    str_sub(pron, 2, 2) <- df %>% 
+      filter(rank == R) %>% 
+      pull(next_phoneme)
+    
+    df$nonword_from_manipulated_onset[R] = pron
+    
+    second_phoneme_ = get_second_phoneme(pron)
+    
+    word_with_same_sound_in_second_pos = elp %>% 
+      filter(second_phoneme == second_phoneme_) %>% 
+      summarise(choice = first(Word)) %>% 
+      pull(choice)
+    
+    df$word_with_same_sound_in_second_pos[R] = word_with_same_sound_in_second_pos
+    
+    if (pron %in% elp$Pron_clean){
+      
+      df$word_not_word[R] = "word"
+
+    }
+    
+    else {
+      
+      df$word_not_word[R] = "nonword"
+      
+      
+    }
+    
+    # get a reference word with the same final phoneme
+  
+  
+    pron = elp_1_syll_onsets$Pron_clean[i]
+    
+    
+    
+  }
+  
+  df = df %>% 
+      filter(next_phoneme %in% consonants)
+  
+  nonword_list_onsets[[i]] = df
+  
+  print(paste(i, "of", nrow(elp_1_syll_onsets), "done"))
+  }
+
+
+
+words_with_manipulated_onsets = purrr::list_rbind(nonword_list_onsets)
+
+words_with_manipulated_onsets = words_with_manipulated_onsets %>% 
+  filter(word_not_word == "nonword") %>% 
+  select(Word = target_word_for_nonword, Pron_clean = target_pron_for_nonword, nonword_from_manipulated_onset, word_with_same_sound_in_second_pos, probability = P, rank)
+
+
+words_with_manipulated_onsets %>% 
+  write_csv("~/Desktop/nonwords_with_manipulated_onsets.csv")
+
+
+```
+
