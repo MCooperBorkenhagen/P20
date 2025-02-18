@@ -9,7 +9,21 @@ knitr::opts_chunk$set(echo = TRUE)
 
 require(tidyverse)
 require(Hmisc)
+options(scipen = 100)
 
+
+
+
+uncond_p = read_csv('data/uncond.p.csv') %>% 
+  glimpse() %>% 
+  rename(phoneme = `...1`) %>% 
+  pivot_longer(cols = -phoneme, values_to = "unconditional_bigram_p", names_to = "phoneme_2") %>% 
+  rename(phoneme_1 = phoneme) %>% 
+  mutate(bigram = str_c(phoneme_1, phoneme_2))
+  
+uncond_raw_freq = read_csv('data/uncond.raw.freq.csv') %>% 
+  glimpse() %>% 
+  rename(phoneme = `...1`)
 
 get_penultimate_phoneme = function(x, return_index = F){
   
@@ -135,6 +149,12 @@ prop_n_1_n = read_csv('data/prop_n-1_n.csv') %>%
          next_phoneme = str_replace_all(next_phoneme, bicode_e, "9"))
 
 
+prop_n_1_n_AAE = read_csv('data/prop_n-1_n_AAE.csv') %>% 
+  rename(phoneme = `...1`) %>% 
+  pivot_longer(cols = -phoneme, names_to = "next_phoneme", values_to = "P")
+
+  
+
 ```
 
 I am imagining a wordflow like this:
@@ -183,11 +203,11 @@ elp_1_syll = elp %>%
 ```
 
 
-## Nonwords generated from manipulating codas
+## Nonwords generated from manipulating codas using probabilities from MAE
 
 ```{r}
 
-nonword_list = list()
+nonword_list_codas = list()
 
 
 for (i in seq(length(elp_1_syll$Pron_clean))){
@@ -205,7 +225,8 @@ for (i in seq(length(elp_1_syll$Pron_clean))){
            target_word_for_nonword = elp_1_syll$Word[i],
            target_pron_for_nonword = pron,
            word_not_word = NA,
-           word_with_same_sound_in_final_pos = NA)
+           word_with_same_sound_in_final_pos = NA,
+           bigram = NA)
 
   for (R in sort(df$rank)){
     
@@ -223,6 +244,8 @@ for (i in seq(length(elp_1_syll$Pron_clean))){
       pull(choice)
     
     df$word_with_same_sound_in_final_pos[R] = word_with_same_sound_in_final_pos
+    df$bigram[R] = str_c(penultimate, last_phoneme_)
+    
     
     if (pron %in% elp$Pron_clean){
       
@@ -249,29 +272,128 @@ for (i in seq(length(elp_1_syll$Pron_clean))){
   df = df %>% 
       filter(next_phoneme %in% consonants)
   
-  nonword_list[[i]] = df
+  nonword_list_codas[[i]] = df
   
   print(paste(i, "of", nrow(elp_1_syll), "done"))
   }
   
 
 
-
-
-words_with_manipulated_coda = purrr::list_rbind(nonword_list)
+words_with_manipulated_coda = purrr::list_rbind(nonword_list_codas)
 
 words_with_manipulated_coda = words_with_manipulated_coda %>% 
   filter(word_not_word == "nonword") %>% 
-  select(Word = target_word_for_nonword, Pron_clean = target_pron_for_nonword, nonword_from_manipulated_coda, word_with_same_sound_in_final_pos, probability = P, rank)
+  select(Word = target_word_for_nonword, Pron_clean = target_pron_for_nonword, nonword_from_manipulated_coda, word_with_same_sound_in_final_pos, bigram, rank_by_conditional_bigram_p = rank, conditional_bigram_p = P) %>% 
+  left_join(uncond_p %>% 
+              select(bigram, unconditional_bigram_p), by = "bigram") %>% 
+  left_join(prop_n_1_n_AAE %>% 
+              mutate(bigram = str_c(phoneme, next_phoneme)) %>% 
+              select(aae_biphone_p = P, bigram), by = "bigram")
 
 
 words_with_manipulated_coda %>% 
-  write_csv("~/Desktop/nonwords_with_manipulated_coda.csv")
+  write_csv("~/Desktop/nonwords_with_manipulated_coda_based_on_mae_probabilities.csv")
+
+```
+
+# Nonwords generated from manipulating codas using probabilities from AAE
+
+
+```{r}
+
+nonword_list_codas = list()
+
+
+for (i in seq(length(elp_1_syll$Pron_clean))){
+
+  pron = elp_1_syll$Pron_clean[i]
+  
+  penultimate = get_penultimate_phoneme(pron)
+  word_final_index = str_length(pron)
+
+  df = prop_n_1_n_AAE %>% 
+    filter(phoneme == penultimate) %>% 
+    arrange(desc(P)) %>% 
+    mutate(rank = seq_len(n()),
+           nonword_from_manipulated_coda = NA,
+           target_word_for_nonword = elp_1_syll$Word[i],
+           target_pron_for_nonword = pron,
+           word_not_word = NA,
+           word_with_same_sound_in_final_pos = NA,
+           bigram = NA)
+
+  for (R in sort(df$rank)){
+    
+    str_sub(pron, word_final_index, word_final_index) <- df %>% 
+      filter(rank == R) %>% 
+      pull(next_phoneme)
+    
+    df$nonword_from_manipulated_coda[R] = pron
+    
+    last_phoneme_ = get_final_phoneme(pron)
+    
+    word_with_same_sound_in_final_pos = elp %>% 
+      filter(last_phoneme == last_phoneme_) %>% 
+      summarise(choice = first(Word)) %>% 
+      pull(choice)
+    
+    df$word_with_same_sound_in_final_pos[R] = word_with_same_sound_in_final_pos
+    df$bigram[R] = str_c(penultimate, last_phoneme_)
+    
+    
+    if (pron %in% elp$Pron_clean){
+      
+      df$word_not_word[R] = "word"
+
+    }
+    
+    else {
+      
+      df$word_not_word[R] = "nonword"
+      
+      
+    }
+    
+    # get a reference word with the same final phoneme
+  
+  
+    pron = elp_1_syll$Pron_clean[i]
+    
+    
+    
+  }
+  
+  df = df %>% 
+      filter(next_phoneme %in% consonants)
+  
+  nonword_list_codas[[i]] = df
+  
+  print(paste(i, "of", nrow(elp_1_syll), "done"))
+  }
+  
+
+
+words_with_manipulated_coda_aae = purrr::list_rbind(nonword_list_codas)
+
+words_with_manipulated_coda_aae = words_with_manipulated_coda_aae %>% 
+  filter(word_not_word == "nonword") %>% 
+  select(Word = target_word_for_nonword, Pron_clean = target_pron_for_nonword, nonword_from_manipulated_coda, word_with_same_sound_in_final_pos, bigram, rank_by_conditional_bigram_p = rank, conditional_bigram_p = P) %>% 
+  left_join(uncond_p %>% 
+              select(bigram, unconditional_bigram_p), by = "bigram") %>% 
+  left_join(prop_n_1_n %>% 
+              mutate(bigram = str_c(phoneme, next_phoneme)) %>% 
+              select(mae_biphone_probability = P, bigram), by = "bigram")
+
+
+words_with_manipulated_coda_aae %>% 
+  write_csv("~/Desktop/nonwords_with_manipulated_coda_based_on_aae_probabilities.csv")
+
 ```
 
 
 
-# Now for the onsets
+
+# Now for the onsets using probabilities from MAE
 ```{r}
 elp_1_syll_onsets = elp %>% 
   filter(NSyll == 1 & str_starts(CV, "CC"))
@@ -293,7 +415,8 @@ for (i in seq(length(elp_1_syll_onsets$Pron_clean))){
            target_word_for_nonword = elp_1_syll_onsets$Word[i],
            target_pron_for_nonword = pron,
            word_not_word = NA,
-           word_with_same_sound_in_second_pos = NA)
+           word_with_same_sound_in_second_pos = NA,
+           bigram = NA)
 
   for (R in sort(df$rank)){
     
@@ -311,6 +434,7 @@ for (i in seq(length(elp_1_syll_onsets$Pron_clean))){
       pull(choice)
     
     df$word_with_same_sound_in_second_pos[R] = word_with_same_sound_in_second_pos
+    df$bigram[R] = str_c(first_phoneme, second_phoneme_)
     
     if (pron %in% elp$Pron_clean){
       
@@ -348,7 +472,9 @@ words_with_manipulated_onsets = purrr::list_rbind(nonword_list_onsets)
 
 words_with_manipulated_onsets = words_with_manipulated_onsets %>% 
   filter(word_not_word == "nonword") %>% 
-  select(Word = target_word_for_nonword, Pron_clean = target_pron_for_nonword, nonword_from_manipulated_onset, word_with_same_sound_in_second_pos, probability = P, rank)
+  select(Word = target_word_for_nonword, Pron_clean = target_pron_for_nonword, nonword_from_manipulated_onset, word_with_same_sound_in_second_pos, bigram, rank_by_conditional_bigram_p = rank, conditional_bigram_p = P) %>% 
+  left_join(uncond_p %>% 
+              select(bigram, unconditional_bigram_p), by = "bigram")
 
 
 words_with_manipulated_onsets %>% 
@@ -356,4 +482,8 @@ words_with_manipulated_onsets %>%
 
 
 ```
+
+# Regarding the onsets using probabilities from AAE 
+We won't compute these because they shouldn't differ across the two dialects.
+
 
